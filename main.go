@@ -5,7 +5,6 @@ import (
 	"apache-kafka-golang/model"
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/joho/godotenv"
 	kafkago "github.com/segmentio/kafka-go"
 	"golang.org/x/sync/errgroup"
@@ -16,8 +15,17 @@ import (
 )
 
 var client *http.Client
+var person model.Person
+var urls []string
 
 func main() {
+	client = &http.Client{Timeout: 10 * time.Second}
+	urls = []string{
+		"https://api.agify.io/?name=Dmitriy",
+		"https://api.genderize.io/?name=Dmitriy",
+		"https://api.nationalize.io/?name=Dmitriy", // TODO stucture creation from field country
+	}
+
 	// Загрузка переменных окружения
 	if err := godotenv.Load(); err != nil {
 		log.Fatalf("error loading env variables: %s", err.Error())
@@ -40,50 +48,8 @@ func main() {
 		return reader.FetchMessage(ctx, messages)
 	})
 
-	// printing json data from kafka
-	var person model.Person
-
-	for msg := range messages {
-		var err error
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		err = json.Unmarshal(msg.Value, &person)
-		if err != nil {
-			log.Fatalf("error while unmarshal: %s\n", err.Error())
-		}
-		break
-	}
-
-	// fetching url
-	//1. Возрастом - https://api.agify.io/?name=Dmitriy
-	//2. Полом - https://api.genderize.io/?name=Dmitriy
-	//3. Национальностью - https://api.nationalize.io/?name=Dmitriy
-	client = &http.Client{Timeout: 10 * time.Second}
-
-	urlAge := "https://api.agify.io/?name=Dmitriy"
-	urlGender := "https://api.genderize.io/?name=Dmitriy"
-	urlCountry := "https://api.nationalize.io/?name=Dmitriy"
-
-	fmt.Printf("GetJson() for Gender\n")
-	err0 := GetJson(urlAge, &person)
-	err1 := GetJson(urlGender, &person)
-	err2 := GetJson(urlCountry, &person.Country)
-
-	if err0 != nil && err1 != nil && err2 != nil {
-		fmt.Printf("error getting person - %s\n", err0.Error())
-		fmt.Printf("error getting person - %s\n", err1.Error())
-		fmt.Printf("error getting person - %s\n", err2.Error())
-	} else {
-		fmt.Printf("age: %d\n", person.Age)
-		fmt.Printf("gender: %v\n", person.Gender)
-		fmt.Printf("country: %v\n", person.Country)
-	}
-	fmt.Println()
-
-	fmt.Printf("PERSON: %+v\n", person)
+	decodeJsonFromKafka(messages)
+	decodeJsonFromUrls(urls)
 
 	// Запись сообщений в другой канал
 	//g.Go(func() error {
@@ -99,6 +65,34 @@ func main() {
 	err := g.Wait()
 	if err != nil {
 		log.Fatalln(err)
+	}
+}
+
+func decodeJsonFromKafka(messages chan kafkago.Message) {
+	for msg := range messages {
+		var err error
+
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		err = json.Unmarshal(msg.Value, &person)
+		if err != nil {
+			log.Fatalf("error while unmarshal: %s\n", err.Error())
+		}
+
+		break
+	}
+}
+
+func decodeJsonFromUrls(urls []string) {
+	for _, url := range urls {
+		err := GetJson(url, &person)
+		if err != nil {
+			log.Fatalf("error while decoding json: %s\n", err.Error())
+		} else {
+			log.Printf("person: %+v\n", person)
+		}
 	}
 }
 
