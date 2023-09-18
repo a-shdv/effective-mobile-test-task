@@ -30,7 +30,7 @@ func (k *Reader) FetchMessage(ctx context.Context, messages chan<- kafkago.Messa
 	for {
 		message, err := k.Reader.FetchMessage(ctx)
 		if err != nil {
-			return err
+			log.Fatalf("error fetching messages: %s", err.Error())
 		}
 
 		select {
