@@ -21,7 +21,7 @@ func NewKafkaWriter() *Writer {
 	}
 }
 
-// WriteMessages Запись сообщений в другой канал
+// WriteMessages Запись сообщений из 1-го канала в другой канал
 func (k *Writer) WriteMessages(ctx context.Context, messages chan kafkago.Message, messageCommitChan chan kafkago.Message) error {
 	for {
 		select {

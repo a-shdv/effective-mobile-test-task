@@ -52,7 +52,7 @@ func (h *Helper) StoreKafkaMessages(kafkaMessages chan kafkago.Message, target i
 	for msg := range kafkaMessages {
 		err := json.Unmarshal(msg.Value, &target)
 		if err != nil {
-			log.Fatalf("could not fill target with message value: %s\n", err.Error())
+			log.Printf("could not fill target with message: %s\n", err.Error())
 			return err
 		}
 	}

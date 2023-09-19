@@ -30,14 +30,15 @@ func (k *Reader) FetchMessage(ctx context.Context, messages chan<- kafkago.Messa
 	for {
 		message, err := k.Reader.FetchMessage(ctx)
 		if err != nil {
-			log.Fatalf("error fetching messages: %s", err.Error())
+			log.Printf("error fetching messages: %s", err.Error())
+			return err
 		}
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case messages <- message:
-			log.Printf("message fetched and sent to a channel: %v \n", string(message.Value))
+			log.Printf("message fetched: %v \n", string(message.Value))
 		}
 	}
 }

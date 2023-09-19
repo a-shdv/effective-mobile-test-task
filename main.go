@@ -43,13 +43,14 @@ func main() {
 	})
 
 	person := model.Person{}
-	errJsonData := helper.ParseAndStoreJsonData(urls, &person)
-	errKafkaMessages := helper.StoreKafkaMessages(kafkaFromChanMessages, &person)
+	err := helper.StoreKafkaMessages(kafkaFromChanMessages, &person)
 
-	if errJsonData != nil || errKafkaMessages != nil {
-		// Запись сообщений в другой канал
+	if err != nil {
 		g.Go(func() error {
-			return writer.WriteMessages(ctx, kafkaFromChanMessages, kafkaToChanMessages)
+			writer.Writer.WriteMessages(ctx, kafkago.Message{
+				Value: []byte(err.Error()),
+			})
+			return err
 		})
 
 		// Фиксация сообщений - в противном случае сообщения отправятся в другой канал еще раз
@@ -58,8 +59,10 @@ func main() {
 		})
 	}
 
+	err = helper.ParseAndStoreJsonData(urls, &person)
+
 	// Блокирующая операция
-	err := g.Wait()
+	err = g.Wait()
 	if err != nil {
 		log.Fatalln(err)
 	}
