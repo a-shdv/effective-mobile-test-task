@@ -19,7 +19,7 @@ var person model.Person
 var urls []string
 
 func main() {
-	client = &http.Client{Timeout: 10 * time.Second}
+	client = &http.Client{Timeout: 5 * time.Second}
 	urls = []string{
 		"https://api.agify.io/?name=Dmitriy",
 		"https://api.genderize.io/?name=Dmitriy",
@@ -33,12 +33,12 @@ func main() {
 
 	// Создание объектов reader, writer
 	reader := kafka.NewKafkaReader()
-	//writer := kafka.NewKafkaWriter()
+	writer := kafka.NewKafkaWriter()
 
 	// Инициализация каналов
 	ctx := context.Background()
-	messages := make(chan kafkago.Message, 1e1)
-	//messageCommitChan := make(chan kafkago.Message, 1000)
+	messages := make(chan kafkago.Message, 1e3)
+	messageCommitChan := make(chan kafkago.Message, 1e6)
 
 	//  Инициализация группы горутин 'g' соответствующим контекстом 'ctx'
 	g, ctx := errgroup.WithContext(ctx)
@@ -48,18 +48,21 @@ func main() {
 		return reader.FetchMessage(ctx, messages)
 	})
 
-	decodeJsonFromKafka(messages)
-	decodeJsonFromUrls(urls)
+	// Person
+	getJsonFromKafka(messages)
+	getJsonFromUrls(urls)
+
+	log.Printf("person: %+v\n", person)
 
 	// Запись сообщений в другой канал
-	//g.Go(func() error {
-	//	return writer.WriteMessages(ctx, messages, messageCommitChan)
-	//})
+	g.Go(func() error {
+		return writer.WriteMessages(ctx, messages, messageCommitChan)
+	})
 
 	// Фиксация сообщений - в противном случае сообщения отправятся в другой канал еще раз
-	//g.Go(func() error {
-	//	return reader.CommitMessages(ctx, messageCommitChan)
-	//})
+	g.Go(func() error {
+		return reader.CommitMessages(ctx, messageCommitChan)
+	})
 
 	// Блокирующая операция
 	err := g.Wait()
@@ -68,7 +71,7 @@ func main() {
 	}
 }
 
-func decodeJsonFromKafka(messages chan kafkago.Message) {
+func getJsonFromKafka(messages chan kafkago.Message) {
 	for msg := range messages {
 		var err error
 
@@ -85,20 +88,19 @@ func decodeJsonFromKafka(messages chan kafkago.Message) {
 	}
 }
 
-func decodeJsonFromUrls(urls []string) {
+func getJsonFromUrls(urls []string) {
 	for _, url := range urls {
-		err := GetJson(url, &person)
+		err := decodeJsonToStruct(url, &person)
 		if err != nil {
 			log.Fatalf("error while decoding json: %s\n", err.Error())
-		} else {
-			log.Printf("person: %+v\n", person)
 		}
 	}
 }
 
-func GetJson(url string, target interface{}) error {
+func decodeJsonToStruct(url string, target interface{}) error {
 	resp, err := client.Get(url)
 	if err != nil {
+		log.Printf("could not parse json froum url: %s\n", err.Error())
 		return err
 	}
 	defer func(Body io.ReadCloser) {
