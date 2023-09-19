@@ -14,7 +14,6 @@ var urls []string
 
 func main() {
 	var helper model.Helper
-
 	urls = []string{
 		"https://api.agify.io/?name=Dmitriy",
 		"https://api.genderize.io/?name=Dmitriy",
@@ -44,24 +43,20 @@ func main() {
 	})
 
 	person := model.Person{}
-	helper.ParseAndStoreJsonData(urls, &person)
-	helper.StoreKafkaMessages(kafkaFromChanMessages, &person)
+	errJsonData := helper.ParseAndStoreJsonData(urls, &person)
+	errKafkaMessages := helper.StoreKafkaMessages(kafkaFromChanMessages, &person)
 
-	log.Printf("person: %s\n", person.Name)
-	log.Printf("person: %s\n", person.Surname)
-	log.Printf("person: %s\n", person.Patronymic)
-	log.Printf("person: %d\n", person.Age)
-	log.Printf("person: %s\n", person.Gender)
+	if errJsonData != nil || errKafkaMessages != nil {
+		// Запись сообщений в другой канал
+		g.Go(func() error {
+			return writer.WriteMessages(ctx, kafkaFromChanMessages, kafkaToChanMessages)
+		})
 
-	// Запись сообщений в другой канал
-	g.Go(func() error {
-		return writer.WriteMessages(ctx, kafkaFromChanMessages, kafkaToChanMessages)
-	})
-
-	// Фиксация сообщений - в противном случае сообщения отправятся в другой канал еще раз
-	g.Go(func() error {
-		return reader.CommitMessages(ctx, kafkaToChanMessages)
-	})
+		// Фиксация сообщений - в противном случае сообщения отправятся в другой канал еще раз
+		g.Go(func() error {
+			return reader.CommitMessages(ctx, kafkaToChanMessages)
+		})
+	}
 
 	// Блокирующая операция
 	err := g.Wait()
