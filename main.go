@@ -1,69 +1,73 @@
 package main
 
 import (
-	"apache-kafka-golang/kafka"
-	"apache-kafka-golang/model"
-	"context"
+	"fmt"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/joho/godotenv"
-	kafkago "github.com/segmentio/kafka-go"
-	"golang.org/x/sync/errgroup"
 	"log"
+	"os"
+	"time"
 )
 
-var urls []string
-
 func main() {
-	var helper model.Helper
-	urls = []string{
-		"https://api.agify.io/?name=Dmitriy",
-		"https://api.genderize.io/?name=Dmitriy",
-		"https://api.nationalize.io/?name=Dmitriy",
-	}
-
 	// Загрузка переменных окружения
 	if err := godotenv.Load(); err != nil {
 		log.Fatalf("error loading env variables: %s", err.Error())
 	}
 
-	// Создание объектов reader, writer
-	reader := kafka.NewKafkaReader()
-	writer := kafka.NewKafkaWriter()
+	topic := os.Getenv("KAFKA_TOPIC_DST")
 
-	// Инициализация каналов
-	ctx := context.Background()
-	kafkaFromChanMessages := make(chan kafkago.Message, 1e3)
-	kafkaToChanMessages := make(chan kafkago.Message, 1e3)
-
-	//  Инициализация группы горутин 'g' соответствующим контекстом 'ctx'
-	g, ctx := errgroup.WithContext(ctx)
-
-	// Получение сообщений с канала
-	g.Go(func() error {
-		return reader.FetchMessage(ctx, kafkaFromChanMessages)
-	})
-
-	person := model.Person{}
-	err := helper.StoreKafkaMessages(kafkaFromChanMessages, &person)
-
+	// Создание нового producer
+	p, err := kafka.NewProducer(&kafka.ConfigMap{
+		"bootstrap.servers": os.Getenv("KAFKA_ADDRESS"),
+		"client.id":         os.Getenv("KAFKA_CLIENT_ID"),
+		"acks":              "all"})
 	if err != nil {
-		g.Go(func() error {
-			writer.Writer.WriteMessages(ctx, kafkago.Message{
-				Value: []byte(err.Error()),
-			})
-			return err
-		})
-
-		// Фиксация сообщений - в противном случае сообщения отправятся в другой канал еще раз
-		g.Go(func() error {
-			return reader.CommitMessages(ctx, kafkaToChanMessages)
-		})
+		fmt.Printf("failed to create producer: %s\n", err)
 	}
 
-	err = helper.ParseAndStoreJsonData(urls, &person)
+	go func() {
+		// Создание нового consumer
+		consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
+			"bootstrap.servers": os.Getenv("KAFKA_ADDRESS"),
+			"group.id":          os.Getenv("KAFKA_GROUP_ID"),
+			"auto.offset.reset": "smallest"})
+		if err != nil {
+			log.Printf("failed to create consumer: %s\n", err)
+		}
 
-	// Блокирующая операция
-	err = g.Wait()
-	if err != nil {
-		log.Fatalln(err)
+		// Подписка на топик кафки
+		err = consumer.Subscribe(topic, nil)
+		if err != nil {
+			log.Fatalf("failed to subcribe: %s\n", err.Error())
+		}
+
+		for {
+			ev := consumer.Poll(100)
+			switch e := ev.(type) {
+			case *kafka.Message:
+				log.Printf("fetched message from kafka queue: %s\n", string(e.Value))
+			case *kafka.Error:
+				log.Printf("error occured while consuming kafka messages: %v\n", e.Error())
+			}
+		}
+	}()
+
+	// Подключение к каналу для отправки сообщения
+	dstChan := make(chan kafka.Event, 10000) // создание канала
+	for {
+		err = p.Produce(&kafka.Message{
+			TopicPartition: kafka.TopicPartition{
+				Topic:     &topic, // название сервиса кафки
+				Partition: kafka.PartitionAny,
+			},
+			Value: []byte("hjjhjghjghj")}, // сообщение для отправки
+			dstChan, // канал, в который хотил передать сообщение
+		)
+		if err != nil {
+			log.Fatalf("could not connect to destination channel: %s\n", err.Error())
+		}
+		<-dstChan
+		time.Sleep(3 * time.Second)
 	}
 }
