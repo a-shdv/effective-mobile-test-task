@@ -9,21 +9,35 @@ import (
 	"time"
 )
 
-type MessageProducer struct {
+type Producer struct {
 	producer *kafka.Producer
 	topic    string
 	dstChan  chan kafka.Event
 }
 
-func NewMessageProducer(p *kafka.Producer, topic string) *MessageProducer {
-	return &MessageProducer{
+type Consumer struct {
+	consumer *kafka.Consumer
+	topic    string
+	srcChan  chan kafka.Event
+}
+
+func NewConsumer(c *kafka.Consumer, topic string) *Consumer {
+	return &Consumer{
+		consumer: c,
+		topic:    topic,
+		srcChan:  make(chan kafka.Event, 10000),
+	}
+}
+
+func NewProducer(p *kafka.Producer, topic string) *Producer {
+	return &Producer{
 		producer: p,
 		topic:    topic,
 		dstChan:  make(chan kafka.Event, 10000),
 	}
 }
 
-func (mp *MessageProducer) produceMessage(message string, size int) error {
+func (mp *Producer) produceMessage(message string, size int) error {
 	var (
 		format  = fmt.Sprintf("%s -  %d", message, size)
 		payload = []byte(format)
@@ -43,6 +57,7 @@ func (mp *MessageProducer) produceMessage(message string, size int) error {
 	}
 
 	<-mp.dstChan
+	log.Printf("message has been produced: %s\n", format)
 	return nil
 }
 
@@ -52,13 +67,8 @@ func main() {
 		log.Fatalf("error loading env variables: %s", err.Error())
 	}
 
-	// Топик кафки, куда будем отправлять сообщения
-	//dstChan := make(chan kafka.Event, 10000) // создание канала
-
-	//srcTopic := os.Getenv("KAFKA_TOPIC_SRC")
-
-	// Создание нового producer
-	p, err := kafka.NewProducer(&kafka.ConfigMap{
+	//Создание нового producer
+	producer, err := kafka.NewProducer(&kafka.ConfigMap{
 		"bootstrap.servers": os.Getenv("KAFKA_ADDRESS"),
 		"client.id":         os.Getenv("KAFKA_CLIENT_ID"),
 		"acks":              os.Getenv("KAFKA_ACKS")})
@@ -66,42 +76,56 @@ func main() {
 		fmt.Printf("failed to create producer: %s\n", err)
 	}
 
+	// Создание нового consumer
+	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
+		"bootstrap.servers": os.Getenv("KAFKA_ADDRESS"),
+		"group.id":          os.Getenv("KAFKA_GROUP_ID"),
+		"auto.offset.reset": os.Getenv("KAFKA_AUTO_OFFSET_RESET")})
+	if err != nil {
+		log.Printf("failed to create consumer: %s\n", err)
+	}
+
+	// Подписка на топик кафки
+	srcTopic := os.Getenv("KAFKA_TOPIC_SRC")
+	err = consumer.Subscribe(srcTopic, nil)
+	if err != nil {
+		log.Fatalf("failed to subcribe: %s\n", err.Error())
+	}
+
+	var data []byte
 	go func() {
-		// Создание нового consumer
-		consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
-			"bootstrap.servers": os.Getenv("KAFKA_ADDRESS"),
-			"group.id":          os.Getenv("KAFKA_GROUP_ID"),
-			"auto.offset.reset": os.Getenv("KAFKA_AUTO_OFFSET_RESET")})
-		if err != nil {
-			log.Printf("failed to create consumer: %s\n", err)
-		}
-
-		// Подписка на топик кафки
-		dstTopic := os.Getenv("KAFKA_TOPIC_DST")
-		err = consumer.Subscribe(dstTopic, nil)
-		if err != nil {
-			log.Fatalf("failed to subcribe: %s\n", err.Error())
-		}
-
 		for {
 			ev := consumer.Poll(100)
-			switch e := ev.(type) {
+			switch msg := ev.(type) {
 			case *kafka.Message:
-				log.Printf("fetched message from kafka queue: %s\n", string(e.Value))
+				log.Printf("fetched message from kafka queue: %s\n", string(msg.Value))
+				data = msg.Value
+				break
 			case *kafka.Error:
-				log.Printf("error occured while consuming kafka messages: %v\n", e.Error())
+				log.Printf("error occured while consuming kafka messages: %v\n", msg.Error())
 			}
 		}
 	}()
 
 	// Публикация сообщейний
-	mp := NewMessageProducer(p, os.Getenv("KAFKA_TOPIC_DST"))
+	mp := NewProducer(producer, os.Getenv("KAFKA_TOPIC_DST"))
 
-	for i := 0; i < 1000; i++ {
-		if err := mp.produceMessage("market", i+1); err != nil {
+	fmt.Printf("%s\n", string(data))
+
+	if len(data) > 0 {
+		if err := mp.produceMessage(string(data), 1); err != nil {
 			log.Fatal(err)
 		}
-		time.Sleep(time.Second * 3)
+		fmt.Printf("check: %s\n", data)
 	}
 
+	// Создание нового consumer
+
+	// subscribe to target topic
+	//err = c.Subscribe(srcTopic, nil)
+	//if err != nil {
+	//	log.Fatalf("could not subscribe topic: %s\n", err.Error())
+	//}
+
+	time.Sleep(time.Second * 30)
 }
