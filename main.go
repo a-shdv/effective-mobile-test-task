@@ -9,19 +9,59 @@ import (
 	"time"
 )
 
+type MessageProducer struct {
+	producer *kafka.Producer
+	topic    string
+	dstChan  chan kafka.Event
+}
+
+func NewMessageProducer(p *kafka.Producer, topic string) *MessageProducer {
+	return &MessageProducer{
+		producer: p,
+		topic:    topic,
+		dstChan:  make(chan kafka.Event, 10000),
+	}
+}
+
+func (mp *MessageProducer) produceMessage(message string, size int) error {
+	var (
+		format  = fmt.Sprintf("%s -  %d", message, size)
+		payload = []byte(format)
+	)
+
+	err := mp.producer.Produce(&kafka.Message{
+		TopicPartition: kafka.TopicPartition{
+			Topic:     &mp.topic,
+			Partition: kafka.PartitionAny,
+		},
+		Value: payload,
+	},
+		mp.dstChan)
+
+	if err != nil {
+		log.Fatalf("error while trying to produce message: %s\n", err.Error())
+	}
+
+	<-mp.dstChan
+	return nil
+}
+
 func main() {
 	// Загрузка переменных окружения
 	if err := godotenv.Load(); err != nil {
 		log.Fatalf("error loading env variables: %s", err.Error())
 	}
 
-	topic := os.Getenv("KAFKA_TOPIC_DST")
+	// Топик кафки, куда будем отправлять сообщения
+	//dstChan := make(chan kafka.Event, 10000) // создание канала
+
+	//srcTopic := os.Getenv("KAFKA_TOPIC_SRC")
 
 	// Создание нового producer
 	p, err := kafka.NewProducer(&kafka.ConfigMap{
 		"bootstrap.servers": os.Getenv("KAFKA_ADDRESS"),
 		"client.id":         os.Getenv("KAFKA_CLIENT_ID"),
-		"acks":              "all"})
+		"acks":              os.Getenv("KAFKA_ACKS")})
 	if err != nil {
 		fmt.Printf("failed to create producer: %s\n", err)
 	}
@@ -31,13 +71,14 @@ func main() {
 		consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
 			"bootstrap.servers": os.Getenv("KAFKA_ADDRESS"),
 			"group.id":          os.Getenv("KAFKA_GROUP_ID"),
-			"auto.offset.reset": "smallest"})
+			"auto.offset.reset": os.Getenv("KAFKA_AUTO_OFFSET_RESET")})
 		if err != nil {
 			log.Printf("failed to create consumer: %s\n", err)
 		}
 
 		// Подписка на топик кафки
-		err = consumer.Subscribe(topic, nil)
+		dstTopic := os.Getenv("KAFKA_TOPIC_DST")
+		err = consumer.Subscribe(dstTopic, nil)
 		if err != nil {
 			log.Fatalf("failed to subcribe: %s\n", err.Error())
 		}
@@ -53,21 +94,14 @@ func main() {
 		}
 	}()
 
-	// Подключение к каналу для отправки сообщения
-	dstChan := make(chan kafka.Event, 10000) // создание канала
-	for {
-		err = p.Produce(&kafka.Message{
-			TopicPartition: kafka.TopicPartition{
-				Topic:     &topic, // название сервиса кафки
-				Partition: kafka.PartitionAny,
-			},
-			Value: []byte("hjjhjghjghj")}, // сообщение для отправки
-			dstChan, // канал, в который хотил передать сообщение
-		)
-		if err != nil {
-			log.Fatalf("could not connect to destination channel: %s\n", err.Error())
+	// Публикация сообщейний
+	mp := NewMessageProducer(p, os.Getenv("KAFKA_TOPIC_DST"))
+
+	for i := 0; i < 1000; i++ {
+		if err := mp.produceMessage("market", i+1); err != nil {
+			log.Fatal(err)
 		}
-		<-dstChan
-		time.Sleep(3 * time.Second)
+		time.Sleep(time.Second * 3)
 	}
+
 }
